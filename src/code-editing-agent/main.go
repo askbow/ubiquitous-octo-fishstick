@@ -82,34 +82,79 @@ func (a *Agent) runInference(ctx context.Context, conversation []anthropic.Messa
 	return message, err
 }
 
+func (a *Agent) executeTool(id, name string, input json.RawMessage) anthropic.ContentBlockParamUnion {
+	var toolDef ToolDefinition
+	var found bool //is this a common pattern in go? do they have hashmaps?
+	for _, tool := range a.tools {
+		if tool.Name == name {
+			toolDef = tool
+			found = true
+			break
+		}
+	}
+	if !found {
+		return anthropic.NewToolResultBlock(id, "tool not found", true)
+	}
+	fmt.Printf("\u001b[92mtool\u001b[0m: %s(%s)\n", name, input)
+	response, err := toolDef.Function(input)
+	if err != nil {
+		return anthropic.NewToolResultBlock(id, err.Error(), true)
+	}
+	return anthropic.NewToolResultBlock(id, response, false)
+}
+
 func (a *Agent) Run(ctx context.Context) error {
 	// main interaction loop
 	conversation := []anthropic.MessageParam{}
 	fmt.Println("Chat with Agent (use 'ctrl-c' to quit)")
-
+	readUserInput := true
 	for {
-		fmt.Print("\u001b[94mYou\u001b[0m: ")
-		userInputRaw, ok := a.getUserMessage()
-		if !ok {
-			break
+		if readUserInput {
+			fmt.Print("\u001b[94mYou\u001b[0m: ")
+			userInputRaw, ok := a.getUserMessage()
+			if !ok {
+				break
+			}
+
+			userMessage := anthropic.NewUserMessage(anthropic.NewTextBlock(userInputRaw))
+			conversation = append(conversation, userMessage)
 		}
-
-		userMessage := anthropic.NewUserMessage(anthropic.NewTextBlock(userInputRaw))
-		conversation = append(conversation, userMessage)
-
 		message, err := a.runInference(ctx, conversation)
 		if err != nil {
 			return err
 		}
 		conversation = append(conversation, message.ToParam())
+
+		toolResults := []anthropic.ContentBlockParamUnion{}
+
 		for _, content := range message.Content {
 			switch content.Type {
 			case "text":
 				fmt.Printf("\u001b[93mAgent\u001b[0m: %s\n", content.Text)
+
+			case "tool_use":
+				result := a.executeTool(content.ID, content.Name, content.Input)
+				toolResults = append(toolResults, result)
 			}
 		}
+		if len(toolResults) == 0 {
+			readUserInput = true
+			continue
+		}
+		readUserInput = false
+		conversation = append(conversation, anthropic.NewUserMessage(toolResults...))
+
 	}
 	return nil
+}
+
+// Tools:
+
+type ToolDefinition struct {
+	Name        string                                      `json:"name"`
+	Description string                                      `json:"description"`
+	InputSchema anthropic.ToolInputSchemaParam              `json:"input_schema"`
+	Function    func(input json.RawMessage) (string, error) `json:"-"`
 }
 
 func GenerateSchema[T any]() anthropic.ToolInputSchemaParam {
@@ -122,15 +167,6 @@ func GenerateSchema[T any]() anthropic.ToolInputSchemaParam {
 	return anthropic.ToolInputSchemaParam{
 		Properties: schema.Properties,
 	}
-}
-
-// Tools:
-
-type ToolDefinition struct {
-	Name        string                                      `json:"name"`
-	Description string                                      `json:"description"`
-	InputSchema anthropic.ToolInputSchemaParam              `json:"input_schema"`
-	Function    func(input json.RawMessage) (string, error) `json:"-"`
 }
 
 // ReadFileTool
