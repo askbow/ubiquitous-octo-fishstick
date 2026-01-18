@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"encoding/json"
+	"path/filepath"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -30,6 +31,7 @@ func main() {
 
 	tools := []ToolDefinition{
 		ReadFileDefinition,
+		ListFilesDefinition,
 	}
 
 	agent := NewAgent(&client, getUserMessage, tools)
@@ -169,7 +171,7 @@ func GenerateSchema[T any]() anthropic.ToolInputSchemaParam {
 	}
 }
 
-// ReadFileTool
+// ReadFile Tool
 var ReadFileDefinition = ToolDefinition{
 	Name: "read_file",
 	Description: "Read the contents from the given relative file path. " +
@@ -197,4 +199,64 @@ func ReadFileTool(input json.RawMessage) (string, error) {
 		return "", err
 	}
 	return string(content), nil
+}
+
+// ListFiles Tool
+var ListFilesDefinition = ToolDefinition{
+	Name: "list_files",
+	Description: "LIst files and directories at a given path. " +
+		"If no path is provided, lists files in the current directory.",
+	InputSchema: ListFilesInputSchema,
+	Function:    ListFilesTool,
+}
+
+type ListFilesInput struct {
+	Path string `json:"path,omitempty" jsonschema_description:"Optional relative path to list files from. Defaults to current directory if not provided."`
+}
+
+var ListFilesInputSchema = GenerateSchema[ListFilesInput]()
+
+func ListFilesTool(input json.RawMessage) (string, error) {
+	ListFilesInput := ListFilesInput{}
+	err := json.Unmarshal(input, &ListFilesInput)
+	if err != nil {
+		panic(err)
+	}
+
+	dir := "."
+	if ListFilesInput.Path != "" {
+		dir = ListFilesInput.Path
+	}
+
+	var files []string
+	err = filepath.Walk(dir, func(path string, infor os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relPath, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+
+		if relPath != "." {
+			if infor.IsDir() {
+				files = append(files, relPath+"/")
+			} else {
+				files = append(files, relPath)
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+
+	result, err := json.Marshal(files)
+	if err != nil {
+		return "", err
+	}
+
+	return string(result), nil
 }
