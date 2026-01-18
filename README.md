@@ -71,9 +71,9 @@ The script:
 - Automatically executes when run
 
 You can now run it with:
-```bash
+
 python3 fizzbuzz.py
-```
+
 
 This will print:
 - "Fizz" for multiples of 3
